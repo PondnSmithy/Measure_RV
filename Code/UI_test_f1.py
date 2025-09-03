@@ -755,6 +755,8 @@ class App(tk.Tk):
             if from_auto:
                 self._auto_stop()
             return
+        
+        self._update_current_indicators()
 
         idx = self.current_idx
         try:
@@ -769,29 +771,23 @@ class App(tk.Tk):
         # อัปเดตค่า
         self.r_values[idx] = r
         self.v_values[idx] = v
-        self._refresh_rows()
-        self._update_big_box()
+        self._refresh_rows()           # อัปเดตตาราง + (คุณเรียก _update_current_indicators ในนี้แล้ว)
+        self._update_big_box()         # อัปเดตกล่องใหญ่/ตัวเลข Live
 
-        # ไป cell ถัดไป หรือสรุปจบ
-        # ไป cell ถัดไป หรือสรุปจบ
         is_last = (self.current_idx >= self.num_points.get() - 1)
         if not is_last:
-            if not from_auto and self.mode.get() == "manual":
-                self._show_next_cell_popup()
-
+            # ❶ ขยับไป cell ถัดไปก่อน แล้วค่อยโชว์ popup
             self.current_idx += 1
             self.point_combo.current(self.current_idx)
-
-            # ⭐ อัปเดตค่าโชว์ด้านบน + ตัวบอก Current + ไฮไลต์แถว
-            self._update_big_box()               # <- ค่า R/V ที่หัวแถบ
-            self._update_current_indicators()    # <- Current: X/20 + ไฮไลต์แถว
-
+            self._update_current_indicators()   # ทำให้ "Current X/N" และแถวไฮไลต์ขยับทันที
             self._scroll_row_into_view(self.current_idx)
+
+            # ❷ แสดง popup หลัง UI ขยับแล้ว (จะเห็นว่าไฮไลต์ย้ายแล้ว)
+            if not from_auto and self.mode.get() == "manual":
+                self.after(0, self._show_next_cell_popup)
         else:
-            # ครบทุกจุด (cell สุดท้าย) → ไม่ต้องแสดงป็อปอัป
             if from_auto and self.auto_export.get():
                 self._export_snapshot()
-
             if from_auto:
                 self._auto_running = False
                 if self._auto_job is not None:
