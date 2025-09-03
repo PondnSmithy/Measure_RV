@@ -10,7 +10,8 @@ Resistance & Voltage Checker (Blue/White UI)
 - Auto export saves only AFTER all cells (when ON); Manual saves only when pressing Export
 """
 
-import os, sys, time, random
+import os, sys, time
+import re
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
