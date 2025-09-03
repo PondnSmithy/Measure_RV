@@ -773,14 +773,19 @@ class App(tk.Tk):
         self._update_big_box()
 
         # ไป cell ถัดไป หรือสรุปจบ
+        # ไป cell ถัดไป หรือสรุปจบ
         is_last = (self.current_idx >= self.num_points.get() - 1)
         if not is_last:
-            # เฉพาะ Manual เท่านั้นที่เด้งป็อปอัปแจ้งให้วัด cell ถัดไป
             if not from_auto and self.mode.get() == "manual":
                 self._show_next_cell_popup()
 
             self.current_idx += 1
             self.point_combo.current(self.current_idx)
+
+            # ⭐ อัปเดตค่าโชว์ด้านบน + ตัวบอก Current + ไฮไลต์แถว
+            self._update_big_box()               # <- ค่า R/V ที่หัวแถบ
+            self._update_current_indicators()    # <- Current: X/20 + ไฮไลต์แถว
+
             self._scroll_row_into_view(self.current_idx)
         else:
             # ครบทุกจุด (cell สุดท้าย) → ไม่ต้องแสดงป็อปอัป
