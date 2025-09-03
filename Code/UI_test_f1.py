@@ -138,6 +138,9 @@ class App(tk.Tk):
         style.configure("Big.TLabel", background=COLOR_PANEL, font=("Segoe UI", 36, "bold"))
         style.configure("Muted.TLabel", background=COLOR_PANEL, foreground=COLOR_MUTED)
         style.configure("Live.TLabel", background=COLOR_PANEL, font=("Segoe UI", 18, "bold"))
+        style.configure("RowActive.TFrame", background="#E8F4FF")  # ไฮไลต์แถวปัจจุบัน (ฟ้าอ่อน)
+        style.configure("CurrentCell.TLabel", background=COLOR_PANEL, font=("Segoe UI", 18, "bold"))
+
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -252,41 +255,6 @@ class App(tk.Tk):
         self.points_frame = ttk.Frame(self.points_canvas, style="Card.TFrame")
         self.points_window = self.points_canvas.create_window((0,0), window=self.points_frame, anchor="nw")
 
-        def _show_next_cell_popup(self):
-            """แสดงป็อปอัป 'Please measure the next cell' แล้วปิดเองใน 1 วินาที"""
-            owner = self.winfo_toplevel()
-
-            # ปิดป็อปอัปเก่าถ้ามี
-            try:
-                if getattr(owner, "_next_cell_popup", None) and owner._next_cell_popup.winfo_exists():
-                    owner._next_cell_popup.destroy()
-            except Exception:
-                pass
-
-            top = tk.Toplevel(owner)
-            owner._next_cell_popup = top
-            top.title("Next Cell")
-            top.transient(owner)
-            try:
-                top.attributes("-topmost", True)
-            except Exception:
-                pass
-            top.configure(bg=COLOR_PANEL)
-
-            frm = ttk.Frame(top, style="Card.TFrame", padding=12)
-            frm.pack(fill="both", expand=True)
-            ttk.Label(frm, text="Please measure the next cell", style="Heading.TLabel").pack(padx=8, pady=4)
-
-            # จัดกึ่งกลางเทียบกับหน้าต่างหลัก
-            top.update_idletasks()
-            owner.update_idletasks()
-            x = owner.winfo_rootx() + (owner.winfo_width()  - top.winfo_reqwidth())  // 2
-            y = owner.winfo_rooty() + (owner.winfo_height() - top.winfo_reqheight()) // 2
-            top.geometry(f"+{x}+{y}")
-
-            # ปิดอัตโนมัติใน 1 วินาที
-            top.after(1000, top.destroy)
-
         # อัปเดต scrollregion และให้ความกว้างภายในเท่ากับแคนวาส
         def _update_scrollregion(_e=None):
             self.points_canvas.configure(scrollregion=self.points_canvas.bbox("all"))
@@ -301,7 +269,7 @@ class App(tk.Tk):
         # ====== จบส่วน Canvas + Scrollbar ======
 
         # rows
-        self.row_widgets = []  # (lamp_label, r_var, r_entry, v_var, v_entry)
+        self.row_widgets = []  # (rowf, lamp, r_var, r_ent, v_var, v_ent, cell_lbl)
         for i in range(self.num_points.get()):
             rowf = ttk.Frame(self.points_frame, style="Card.TFrame")
             rowf.grid_columnconfigure(0, minsize=COL_W_POINT, weight=0)
@@ -310,26 +278,27 @@ class App(tk.Tk):
             rowf.grid_columnconfigure(3, minsize=COL_W_NUM,   weight=0)
             rowf.pack(fill="x", pady=4)
 
-            lbl = ttk.Label(rowf, text=f"Cell {i+1}")
-            lbl.grid(row=0, column=0, sticky="w", padx=(COL_LEFT_PAD,2))
-            lbl.bind("<Button-1>", lambda e, idx=i: self._jump_to(idx))
+            cell_lbl = ttk.Label(rowf, text=f"Cell {i+1}")
+            cell_lbl.grid(row=0, column=0, sticky="w", padx=(COL_LEFT_PAD,2))
+            cell_lbl.bind("<Button-1>", lambda e, idx=i: self._jump_to(idx))
 
             lamp = tk.Label(rowf, width=8, height=1, bg=COLOR_NEUTRAL, relief="solid", bd=1)
             lamp.grid(row=0, column=1, sticky="ew", padx=4)
 
             r_var = tk.StringVar(value="")
             r_ent = tk.Entry(rowf, textvariable=r_var, width=20, justify="center",
-                             relief="solid", bd=1)
+                            relief="solid", bd=1)
             r_ent.configure(state="readonly", readonlybackground="white")
             r_ent.grid(row=0, column=2, sticky="ew", padx=4, ipady=2)
 
             v_var = tk.StringVar(value="")
             v_ent = tk.Entry(rowf, textvariable=v_var, width=20, justify="center",
-                             relief="solid", bd=1)
+                            relief="solid", bd=1)
             v_ent.configure(state="readonly", readonlybackground="white")
             v_ent.grid(row=0, column=3, sticky="ew", padx=4, ipady=2)
 
-            self.row_widgets.append((lamp, r_var, r_ent, v_var, v_ent))
+            self.row_widgets.append((rowf, lamp, r_var, r_ent, v_var, v_ent, cell_lbl))
+
 
         # ---- bottom controls ----
         sep = ttk.Separator(wrapper, orient="horizontal")
@@ -341,6 +310,8 @@ class App(tk.Tk):
         self.btn_measure = ttk.Button(ctrl, text="Measure (Manual)", command=self._measure_one)
         self.btn_measure.pack(side="left", padx=(0,8), ipady=2)
 
+        self.lbl_current_cell = ttk.Label(ctrl, text="", style="CurrentCell.TLabel")
+        self.lbl_current_cell.pack(side="left", padx=(12,0))
         self.lbl_ohm = ttk.Label(ctrl, text="— mΩ", style="Live.TLabel"); self.lbl_ohm.pack(side="left", padx=20)
         self.lbl_volt= ttk.Label(ctrl, text="— V",  style="Live.TLabel"); self.lbl_volt.pack(side="left", padx=20)
 
@@ -370,8 +341,8 @@ class App(tk.Tk):
         ttk.Button(bottom, text="Export (.txt)", command=self._export_txt_table).pack(side="left", padx=(10,0))
 
         self._update_mode_buttons()
-        self._refresh_rows()
         self._update_big_box()
+        self._update_current_indicators()
 
     # ---------- Setting ----------
     def _build_setting(self):
@@ -443,6 +414,40 @@ class App(tk.Tk):
         self._refresh_com_ports()
         self._update_serial_buttons()
 
+    def _show_next_cell_popup(self):
+                """แสดงป็อปอัป 'Please measure the next cell' แล้วปิดเองใน 1 วินาที"""
+                owner = self.winfo_toplevel()
+
+                # ปิดป็อปอัปเก่าถ้ามี
+                try:
+                    if getattr(owner, "_next_cell_popup", None) and owner._next_cell_popup.winfo_exists():
+                        owner._next_cell_popup.destroy()
+                except Exception:
+                    pass
+
+                top = tk.Toplevel(owner)
+                owner._next_cell_popup = top
+                top.title("Next Cell")
+                top.transient(owner)
+                try:
+                    top.attributes("-topmost", True)
+                except Exception:
+                    pass
+                top.configure(bg=COLOR_PANEL)
+
+                frm = ttk.Frame(top, style="Card.TFrame", padding=12)
+                frm.pack(fill="both", expand=True)
+                ttk.Label(frm, text="Please measure the next cell", style="Heading.TLabel").pack(padx=8, pady=4)
+
+                # จัดกึ่งกลางเทียบกับหน้าต่างหลัก
+                top.update_idletasks()
+                owner.update_idletasks()
+                x = owner.winfo_rootx() + (owner.winfo_width()  - top.winfo_reqwidth())  // 2
+                y = owner.winfo_rooty() + (owner.winfo_height() - top.winfo_reqheight()) // 2
+                top.geometry(f"+{x}+{y}")
+
+                # ปิดอัตโนมัติใน 1 วินาที
+                top.after(1000, top.destroy)
     # ---------- Settings apply ----------
     def _apply_settings(self):
         try:
@@ -464,6 +469,7 @@ class App(tk.Tk):
             self._refresh_limits_labels()
             self._refresh_rows()
             self._update_big_box()
+            self._update_current_indicators()
 
         messagebox.showinfo("Apply", "Settings applied.")
 
@@ -541,6 +547,38 @@ class App(tk.Tk):
         self.btn_auto_start.state(["!disabled" if is_auto else "disabled"])
         self.btn_auto_stop.state(["!disabled" if is_auto else "disabled"])
 
+    def _update_current_indicators(self):
+        # อัปเดตข้อความข้างปุ่ม
+        try:
+            self.lbl_current_cell.config(
+                text=f"Current: Cell {self.current_idx+1} / {self.num_points.get()}"
+            )
+        except Exception:
+            pass
+
+        # ไฮไลต์แถวปัจจุบัน + ทำกรอบที่ lamp + ทำตัวหนาที่ label "Cell X"
+        for i, (rowf, lamp, r_var, r_ent, v_var, v_ent, cell_lbl) in enumerate(self.row_widgets):
+            if i == self.current_idx:
+                rowf.configure(style="RowActive.TFrame")
+                try:
+                    lamp.configure(highlightthickness=2, highlightbackground="#4A90E2")
+                except Exception:
+                    pass
+                try:
+                    cell_lbl.configure(font=("Segoe UI", 10, "bold"))
+                except Exception:
+                    pass
+            else:
+                rowf.configure(style="Card.TFrame")
+                try:
+                    lamp.configure(highlightthickness=0)
+                except Exception:
+                    pass
+                try:
+                    cell_lbl.configure(font=("Segoe UI", 10, "normal"))
+                except Exception:
+                    pass
+
     def _browse_folder(self):
         path = filedialog.askdirectory(title="Choose folder to save")
         if path:
@@ -549,12 +587,14 @@ class App(tk.Tk):
     def _on_combo(self, _e):
         self.current_idx = int(self.point_combo.get()) - 1
         self._update_big_box()
+        self._update_current_indicators()
         self._scroll_row_into_view(self.current_idx)
 
     def _jump_to(self, idx):
         self.current_idx = idx
         self.point_combo.current(idx)
         self._update_big_box()
+        self._update_current_indicators()
         self._scroll_row_into_view(idx)
 
     def _update_points_scroll(self, _e=None):
@@ -615,7 +655,7 @@ class App(tk.Tk):
     def _refresh_rows(self):
         rmin, rmax = self._r_bounds()
         vmin, vmax = self._v_bounds()
-        for i,(lamp, r_var, r_ent, v_var, v_ent) in enumerate(self.row_widgets):
+        for i,(rowf, lamp, r_var, r_ent, v_var, v_ent, cell_lbl) in enumerate(self.row_widgets):
             r = self.r_values[i]
             v = self.v_values[i]
 
