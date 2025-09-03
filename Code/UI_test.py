@@ -607,33 +607,52 @@ class App(tk.Tk):
 
     # ---------- measurement ----------
     def _measure_one(self, from_auto: bool = False):
+        # ยังไม่ต่อ COM → เตือนและยกเลิก
+        if not self._ensure_connected():
+            if from_auto:
+                self._auto_stop()
+            return
+
         idx = self.current_idx
-        r, v = self._read_meter()   # TODO: replace with real meter I/O
+        try:
+            r, v = self._read_meter()
+        except Exception as e:
+            # แจ้ง error และถ้าอยู่ในโหมด auto ให้หยุด
+            messagebox.showerror("Measure Error", f"Failed to read data:\n{e}")
+            if from_auto:
+                self._auto_stop()
+            return
+
+        # อัปเดตค่า
         self.r_values[idx] = r
         self.v_values[idx] = v
         self._refresh_rows()
         self._update_big_box()
 
-        # เดินหน้าจุดถัดไป หรือจบการวัด
-        if self.current_idx < self.num_points.get() - 1:
+        # ไป cell ถัดไป หรือสรุปจบ
+        is_last = (self.current_idx >= self.num_points.get() - 1)
+        if not is_last:
+            # เฉพาะ Manual เท่านั้นที่เด้งป็อปอัปแจ้งให้วัด cell ถัดไป
+            if not from_auto and self.mode.get() == "manual":
+                self._show_next_cell_popup()
+
             self.current_idx += 1
             self.point_combo.current(self.current_idx)
             self._scroll_row_into_view(self.current_idx)
         else:
-            # มาถึงจุดสุดท้ายแล้ว
+            # ครบทุกจุด (cell สุดท้าย) → ไม่ต้องแสดงป็อปอัป
             if from_auto and self.auto_export.get():
-                # Auto mode + Auto Export ON → เซฟหลังครบทุกจุด
                 self._export_snapshot()
-            # หยุด auto ถ้ากำลังวิ่ง
+
             if from_auto:
                 self._auto_running = False
                 if self._auto_job is not None:
-                    self.after_cancel(self._auto_job)
-                    self._auto_job = None
+                    self.after_cancel(self._auto_job); self._auto_job = None
                 self._update_mode_buttons()
                 self.after(0, lambda: messagebox.showinfo("Auto", "Auto measurement finished."))
             else:
                 messagebox.showinfo("Done", "Measured all cells.")
+
 
     def _auto_start(self):
         if self._auto_running:
@@ -736,6 +755,38 @@ class App(tk.Tk):
                 v = v_center + random.choice([-1,1]) * random.uniform(0.7*v_span, 1.6*v_span)
             return float(r), float(v)
 
+
+    def _show_next_cell_popup(self):
+        """แสดงป็อปอัป 'Please measure the next cell' แล้วปิดเองใน 1 วินาที"""
+        # ปิดป็อปอัปเก่าถ้ามี (กันซ้อน)
+        try:
+            if getattr(self, "_next_cell_popup", None) and self._next_cell_popup.winfo_exists():
+                self._next_cell_popup.destroy()
+        except Exception:
+            pass
+
+        top = tk.Toplevel(self)
+        self._next_cell_popup = top
+        top.title("Next Cell")
+        top.transient(self)
+        try:
+            top.attributes("-topmost", True)
+        except Exception:
+            pass
+        top.configure(bg=COLOR_PANEL)
+
+        frm = ttk.Frame(top, style="Card.TFrame", padding=12)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text="Please measure the next cell", style="Heading.TLabel").pack(padx=8, pady=4)
+
+        # จัดกึ่งกลางเหนือหน้าต่างหลัก
+        top.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width()  - top.winfo_reqwidth())  // 2
+        y = self.winfo_rooty() + (self.winfo_height() - top.winfo_reqheight()) // 2
+        top.geometry(f"+{x}+{y}")
+
+        # ปิดอัตโนมัติใน 1 วินาที
+        top.after(1000, top.destroy)
 
     # ---------- export ----------
     def _toggle_auto_export(self):
