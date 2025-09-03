@@ -54,6 +54,8 @@ class App(tk.Tk):
         self.configure(bg=COLOR_BG)
         self.geometry("1180x720")
         self.minsize(1080, 640)
+        self._next_cell_popup = None
+
 
         # icon (py / PyInstaller)
         try:
@@ -252,17 +254,19 @@ class App(tk.Tk):
 
         def _show_next_cell_popup(self):
             """แสดงป็อปอัป 'Please measure the next cell' แล้วปิดเองใน 1 วินาที"""
-            # ปิดป็อปอัปเก่าถ้ามี (กันซ้อน)
+            owner = self.winfo_toplevel()
+
+            # ปิดป็อปอัปเก่าถ้ามี
             try:
-                if getattr(self, "_next_cell_popup", None) and self._next_cell_popup.winfo_exists():
-                    self._next_cell_popup.destroy()
+                if getattr(owner, "_next_cell_popup", None) and owner._next_cell_popup.winfo_exists():
+                    owner._next_cell_popup.destroy()
             except Exception:
                 pass
 
-            top = tk.Toplevel(self)
-            self._next_cell_popup = top
+            top = tk.Toplevel(owner)
+            owner._next_cell_popup = top
             top.title("Next Cell")
-            top.transient(self)
+            top.transient(owner)
             try:
                 top.attributes("-topmost", True)
             except Exception:
@@ -273,10 +277,11 @@ class App(tk.Tk):
             frm.pack(fill="both", expand=True)
             ttk.Label(frm, text="Please measure the next cell", style="Heading.TLabel").pack(padx=8, pady=4)
 
-            # จัดกึ่งกลางหน้าต่างหลัก
+            # จัดกึ่งกลางเทียบกับหน้าต่างหลัก
             top.update_idletasks()
-            x = self.winfo_rootx() + (self.winfo_width()  - top.winfo_reqwidth())  // 2
-            y = self.winfo_rooty() + (self.winfo_height() - top.winfo_reqheight()) // 2
+            owner.update_idletasks()
+            x = owner.winfo_rootx() + (owner.winfo_width()  - top.winfo_reqwidth())  // 2
+            y = owner.winfo_rooty() + (owner.winfo_height() - top.winfo_reqheight()) // 2
             top.geometry(f"+{x}+{y}")
 
             # ปิดอัตโนมัติใน 1 วินาที
