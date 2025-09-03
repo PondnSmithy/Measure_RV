@@ -581,9 +581,9 @@ class App(tk.Tk):
             v = self.v_values[i]
 
             if r is None: r_var.set("")
-            else:        r_var.set(f"{r:.3g}")
+            else:        r_var.set(f"{r:.2f}")
             if v is None: v_var.set("")
-            else:         v_var.set(f"{v:.3g}")
+            else:         v_var.set(f"{v:.4f}")
 
             ok_r = (r is not None) and (rmin <= r <= rmax)
             ok_v = (v is not None) and (vmin <= v <= vmax)
@@ -600,9 +600,10 @@ class App(tk.Tk):
     def _update_big_box(self):
         r = self.r_values[self.current_idx]
         v = self.v_values[self.current_idx]
-        self.lbl_ohm.config(text=("— mΩ" if r is None else f"{r:.2g} mΩ"))
-        self.lbl_volt.config(text=("— V"  if v is None else f"{v:.4g} V"))
+        self.lbl_ohm.config(text=("— mΩ" if r is None else f"{r:.2f} mΩ"))   # <-- 2 decimal
+        self.lbl_volt.config(text=("— V"  if v is None else f"{v:.4f} V"))   # <-- 4 decimal
         self._draw_big_box()
+
 
     # ---------- measurement ----------
     def _measure_one(self, from_auto: bool = False):
