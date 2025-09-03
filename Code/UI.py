@@ -96,7 +96,13 @@ class App(tk.Tk):
         self._setup_styles()
         self._build_ui()
 
-    
+    def _ensure_connected(self) -> bool:
+        """เช็กว่าเชื่อมต่อ serial แล้วหรือยัง; ยังไม่ต่อให้เตือนและคืน False"""
+        if self.ser and getattr(self.ser, "is_open", True):
+            return True
+        messagebox.showerror("Serial", "COM Port is not connected.\nPlease connect it before starting the measurement")
+        return False
+
     # ---------- helpers for derived bounds ----------
     def _r_bounds(self):
         rmin = float(self.r_set.get()) - float(self.r_tol.get())
@@ -370,7 +376,7 @@ class App(tk.Tk):
         ttk.Label(r2, text="V", style="Muted.TLabel").pack(side="left")
 
         ttk.Button(meas, text="Apply", command=self._apply_settings).pack(anchor="w", pady=(10,2))
-        ttk.Label(meas, text="เงื่อนไข: |R - R_set| ≤ R_tol และ |V - V_set| ≤ V_tol", style="Muted.TLabel").pack(anchor="w")
+        ttk.Label(meas, text="Condition: |R - R_set| ≤ R_tol และ |V - V_set| ≤ V_tol", style="Muted.TLabel").pack(anchor="w")
 
         # ========== Instrument I/O ==========
         io = ttk.Labelframe(frm, text="Instrument I/O", style="Card.TLabelframe", padding=12)
@@ -392,11 +398,7 @@ class App(tk.Tk):
         rc = ttk.Frame(io, style="Card.TFrame"); rc.pack(fill="x", pady=6)
         self.btn_connect = ttk.Button(rc, text="Connect", command=self._connect_serial); self.btn_connect.pack(side="left")
         self.btn_disconnect = ttk.Button(rc, text="Disconnect", command=self._disconnect_serial); self.btn_disconnect.pack(side="left", padx=8)
-        ttk.Button(rc, text="Test Read", command=lambda: messagebox.showinfo(
-            "Test Read",
-            f"Simulated read:\nR={self._read_meter()[0]:.2f} mΩ, V={self._read_meter()[1]:.4f} V\n\n"
-            "(*จะอ่านจริงเมื่อคุณใส่โปรโตคอลกับเครื่องวัดแล้ว)")
-        ).pack(side="left", padx=(8,0))
+        ttk.Button(rc, text="Test Read", command=self._test_read).pack(side="left", padx=(8,0))
 
         self.lbl_conn = ttk.Label(io, text="Status: Disconnected", style="Muted.TLabel")
         self.lbl_conn.pack(anchor="w", pady=(8,0))
@@ -604,43 +606,123 @@ class App(tk.Tk):
         self.lbl_volt.config(text=("— V"  if v is None else f"{v:.4f} V"))   # <-- 4 decimal
         self._draw_big_box()
 
+    def _read_meter(self):
+        """
+        อ่านค่าจากเครื่องวัดผ่าน Serial
+        โพรโทคอลตัวอย่าง: ส่ง 'FETC?' แล้วเครื่องตอบแบบ
+        '+5.87263E-03,+3.09940E+00,+0'
+        - ตัวแรก = R (โอห์ม) -> แปลงเป็น mΩ สำหรับ GUI
+        - ตัวที่สอง = V (โวลต์)
+        """
+        if not self.ser or not getattr(self.ser, "is_open", True):
+            raise RuntimeError("Serial not connected")
+
+        try:
+            # เคลียร์บัฟเฟอร์ (กันค้าง)
+            if hasattr(self.ser, "reset_input_buffer"):
+                self.ser.reset_input_buffer()
+            if hasattr(self.ser, "reset_output_buffer"):
+                self.ser.reset_output_buffer()
+
+            # ส่งคำสั่งอ่าน (ปรับ \r\n ตามเครื่องของคุณ)
+            cmd = b"FETC?\r\n"
+            self.ser.write(cmd)
+            self.ser.flush()
+
+            # อ่าน 1 บรรทัด
+            raw = self.ser.readline().decode("ascii", "ignore").strip()
+            if not raw:
+                # เผื่อบางรุ่นต้อง read_until
+                raw = self.ser.read_until(b"\n", 200).decode("ascii", "ignore").strip()
+            if not raw:
+                raise TimeoutError("No response received from the device.")
+
+            # แยกและแปลงเป็นตัวเลข
+            parts = re.split(r"[,\s]+", raw)
+            nums = []
+            for p in parts:
+                try:
+                    nums.append(float(p))
+                except:
+                    pass
+
+            if len(nums) < 2:
+                raise ValueError(f"Invalid data format: {raw!r}")
+
+            r_ohm = float(nums[0])
+            v_volt = float(nums[1])
+
+            # แปลง R (Ω) -> mΩ สำหรับแสดงใน GUI
+            r_milliohm = r_ohm * 1000.0
+            return r_milliohm, v_volt
+
+        except Exception as e:
+            # โยนต่อให้ผู้เรียกจัดการ (เพื่อขึ้น popup และหยุดลูป auto)
+            raise
+
+    def _test_read(self):
+        """ทดสอบอ่านค่า 1 ครั้งจากเครื่อง ถ้าไม่ได้ต่อ COM จะขึ้น popup เตือน"""
+        if not self._ensure_connected():
+            return
+        try:
+            r, v = self._read_meter()
+            messagebox.showinfo("Test Read", f"Read OK\nR = {r:.2f} mΩ\nV = {v:.4f} V")
+        except Exception as e:
+            messagebox.showerror("Test Read", f"Read failed:\n{e}")
+
 
     # ---------- measurement ----------
     def _measure_one(self, from_auto: bool = False):
+        # ยังไม่ต่อ COM → เตือนและยกเลิก
+        if not self._ensure_connected():
+            if from_auto:
+                self._auto_stop()
+            return
+
         idx = self.current_idx
-        r, v = self._read_meter()   # TODO: replace with real meter I/O
+        try:
+            r, v = self._read_meter()
+        except Exception as e:
+            # แจ้ง error และถ้าอยู่ในโหมด auto ให้หยุด
+            messagebox.showerror("Measure Error", f"Failed to read data:\n{e}")
+            if from_auto:
+                self._auto_stop()
+            return
+
+        # อัปเดตค่า
         self.r_values[idx] = r
         self.v_values[idx] = v
         self._refresh_rows()
         self._update_big_box()
 
-        # เดินหน้าจุดถัดไป หรือจบการวัด
+        # ไป cell ถัดไป หรือสรุปจบ
         if self.current_idx < self.num_points.get() - 1:
             self.current_idx += 1
             self.point_combo.current(self.current_idx)
             self._scroll_row_into_view(self.current_idx)
         else:
-            # มาถึงจุดสุดท้ายแล้ว
+            # ครบทุกจุด
             if from_auto and self.auto_export.get():
-                # Auto mode + Auto Export ON → เซฟหลังครบทุกจุด
                 self._export_snapshot()
-            # หยุด auto ถ้ากำลังวิ่ง
+
             if from_auto:
                 self._auto_running = False
                 if self._auto_job is not None:
-                    self.after_cancel(self._auto_job)
-                    self._auto_job = None
+                    self.after_cancel(self._auto_job); self._auto_job = None
                 self._update_mode_buttons()
                 self.after(0, lambda: messagebox.showinfo("Auto", "Auto measurement finished."))
             else:
                 messagebox.showinfo("Done", "Measured all cells.")
 
     def _auto_start(self):
+        if not self._ensure_connected():
+            return
         if self._auto_running:
             return
         self._auto_running = True
         self._update_mode_buttons()
         self._tick_auto()
+
 
     def _auto_stop(self):
         self._auto_running = False
@@ -707,34 +789,6 @@ class App(tk.Tk):
                 return raw.decode("utf-8", errors="ignore")
         finally:
             self.ser.timeout = old_to
-
-    def _read_meter(self):
-        """
-        พยายามอ่านค่าจริงด้วย FETC?:
-        - เครื่องส่ง R เป็นโอห์ม, V เป็นโวลต์ -> แปลง R เป็น mΩ เพื่อให้ตรง UI
-        ถ้าอ่านไม่ได้ ค่อย fallback เป็น random ในกรอบลิมิต
-        """
-        try:
-            line = self._query_fetc_once(line_ending=b"\r\n")  # หรือ b"\n" หากเครื่องใช้แค่นิวไลน์เดียว
-            r_ohm, v_volt, _status = self._parse_meter_line(line)
-            r_milliohm = r_ohm * 1000.0  # แปลงโอห์ม -> mΩ
-            return float(r_milliohm), float(v_volt)
-
-        except Exception:
-            # Fallback: สุ่มค่าในกรอบ Set±Tol เหมือนเดิม (ใช้งานได้แม้ไม่มีเครื่อง)
-            rmin, rmax = self._r_bounds()
-            vmin, vmax = self._v_bounds()
-            r_center = (rmin + rmax)/2
-            v_center = (vmin + vmax)/2
-            r_span = (rmax - rmin)/2
-            v_span = (vmax - vmin)/2
-            if random.random() < 0.8:
-                r = random.uniform(r_center-0.6*r_span, r_center+0.6*r_span)
-                v = random.uniform(v_center-0.6*v_span, v_center+0.6*v_span)
-            else:
-                r = r_center + random.choice([-1,1]) * random.uniform(0.7*r_span, 1.6*r_span)
-                v = v_center + random.choice([-1,1]) * random.uniform(0.7*v_span, 1.6*v_span)
-            return float(r), float(v)
 
 
     # ---------- export ----------

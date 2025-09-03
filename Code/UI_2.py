@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 Resistance & Voltage Checker (Blue/White UI)
-- Right panel fixed width with fully working scrolling (mouse wheel + buttons)
-- Limits section uses pack (no grid)
+- Right panel fixed width (so big left canvas has more room)
+- Limits section shows Min/Max derived from Set ± Tol
 - Active column is centered color block (Label)
 - R/V values centered; red text when out of spec
 - Manual / Auto measurement (simulated)
-- Auto-export toggle (save once after all points in Auto mode) + Manual export
-- Clear Results (reset only measurements) vs Reset All
-- COM ports are numerically sorted (COM2, COM3, COM10 ...)
+- Auto-export toggle (timestamped .txt to chosen folder; default cwd)
+- Auto export saves only AFTER all cells (when ON); Manual saves only when pressing Export
 """
 
 import os, sys, time, random
@@ -42,11 +41,14 @@ COL_W_LAMP  = 80
 COL_W_NUM   = 220
 COL_LEFT_PAD = 6
 
-RIGHT_TABLE_WIDTH = COL_W_POINT + COL_W_LAMP + COL_W_NUM*2 + 40  # +40 padding/scrollbar
+RIGHT_TABLE_WIDTH = COL_W_POINT + COL_W_LAMP + COL_W_NUM*2 + 40  # +padding/scrollbar
 
+
+        
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
+        
         self.title("Resistance & Voltage Checker")
         self.configure(bg=COLOR_BG)
         self.geometry("1180x720")
@@ -67,22 +69,22 @@ class App(tk.Tk):
 
         # ----- model vars -----
         self.model_name    = tk.StringVar(value="")
-        self.num_points    = tk.IntVar(value=20)   # เริ่มต้น 20 จุด
+        self.num_points    = tk.IntVar(value=20)
         self.auto_interval = tk.IntVar(value=500)  # ms
         self.mode          = tk.StringVar(value="manual")
         self.save_folder   = tk.StringVar(value="")
-        self.auto_export   = tk.BooleanVar(value=False)  # save-after-finish in Auto mode
+        self.auto_export   = tk.BooleanVar(value=False)
 
-        # limits
-        self.r_min = tk.DoubleVar(value=9.5)
-        self.r_max = tk.DoubleVar(value=10.5)
-        self.v_min = tk.DoubleVar(value=4.9)
-        self.v_max = tk.DoubleVar(value=5.1)
+        # ---- limits as Set ± Tol (instead of Min/Max) ----
+        self.r_set = tk.DoubleVar(value=10.0)
+        self.r_tol = tk.DoubleVar(value=0.5)
+        self.v_set = tk.DoubleVar(value=5.0)
+        self.v_tol = tk.DoubleVar(value=0.1)
 
-        # serial placeholders
+        # ---- serial settings ----
+        self.com_port  = tk.StringVar(value="")
+        self.baudrate  = tk.StringVar(value="9600")
         self.ser = None
-        self.com_port = tk.StringVar(value="")
-        self.baudrate = tk.StringVar(value="9600")
 
         # data arrays
         self._init_arrays()
@@ -93,6 +95,18 @@ class App(tk.Tk):
 
         self._setup_styles()
         self._build_ui()
+
+    
+    # ---------- helpers for derived bounds ----------
+    def _r_bounds(self):
+        rmin = float(self.r_set.get()) - float(self.r_tol.get())
+        rmax = float(self.r_set.get()) + float(self.r_tol.get())
+        return rmin, rmax
+
+    def _v_bounds(self):
+        vmin = float(self.v_set.get()) - float(self.v_tol.get())
+        vmax = float(self.v_set.get()) + float(self.v_tol.get())
+        return vmin, vmax
 
     # ---------- data ----------
     def _init_arrays(self):
@@ -143,7 +157,7 @@ class App(tk.Tk):
         ttk.Label(top, text="Model", style="Heading.TLabel").pack(side="left")
         ttk.Entry(top, textvariable=self.model_name, width=26).pack(side="left", padx=(6,16))
 
-        ttk.Label(top, text="Point", style="Heading.TLabel").pack(side="left")
+        ttk.Label(top, text="Cell", style="Heading.TLabel").pack(side="left")
         self.point_combo = ttk.Combobox(top, state="readonly", width=5,
                                         values=[i+1 for i in range(self.num_points.get())])
         self.point_combo.current(self.current_idx)
@@ -177,24 +191,26 @@ class App(tk.Tk):
         right.pack_propagate(False)
 
         # ---- Limits (pack, no grid) ----
-        limits = ttk.LabelFrame(right, text="Limits", style="Card.TLabelframe")
+        limits = ttk.LabelFrame(right, text="Limits (derived from Set ± Tol)", style="Card.TLabelframe")
         limits.pack(fill="x", pady=(0,10), padx=(0,2))
 
         row1 = ttk.Frame(limits, style="Card.TFrame"); row1.pack(anchor="w", pady=2)
         ttk.Label(row1, text="R", width=2, style="Heading.TLabel").pack(side="left", padx=(0,6))
         ttk.Label(row1, text="Min", width=4, style="Muted.TLabel").pack(side="left")
-        self.lbl_rmin = ttk.Label(row1, text=f"{self.r_min.get():.3g}", width=8, anchor="center"); self.lbl_rmin.pack(side="left")
+        self.lbl_rmin = ttk.Label(row1, text="", width=8, anchor="center"); self.lbl_rmin.pack(side="left")
         ttk.Label(row1, text="Max", width=4, style="Muted.TLabel").pack(side="left", padx=(10,0))
-        self.lbl_rmax = ttk.Label(row1, text=f"{self.r_max.get():.3g}", width=8, anchor="center"); self.lbl_rmax.pack(side="left")
-        ttk.Label(row1, text="Ω", style="Muted.TLabel").pack(side="left", padx=(6,0))
+        self.lbl_rmax = ttk.Label(row1, text="", width=8, anchor="center"); self.lbl_rmax.pack(side="left")
+        ttk.Label(row1, text="mΩ", style="Muted.TLabel").pack(side="left", padx=(6,0))
 
         row2 = ttk.Frame(limits, style="Card.TFrame"); row2.pack(anchor="w", pady=2)
         ttk.Label(row2, text="V", width=2, style="Heading.TLabel").pack(side="left", padx=(0,6))
         ttk.Label(row2, text="Min", width=4, style="Muted.TLabel").pack(side="left")
-        self.lbl_vmin = ttk.Label(row2, text=f"{self.v_min.get():.3g}", width=8, anchor="center"); self.lbl_vmin.pack(side="left")
+        self.lbl_vmin = ttk.Label(row2, text="", width=8, anchor="center"); self.lbl_vmin.pack(side="left")
         ttk.Label(row2, text="Max", width=4, style="Muted.TLabel").pack(side="left", padx=(10,0))
-        self.lbl_vmax = ttk.Label(row2, text=f"{self.v_max.get():.3g}", width=8, anchor="center"); self.lbl_vmax.pack(side="left")
+        self.lbl_vmax = ttk.Label(row2, text="", width=8, anchor="center"); self.lbl_vmax.pack(side="left")
         ttk.Label(row2, text="V", style="Muted.TLabel").pack(side="left", padx=(6,0))
+
+        self._refresh_limits_labels()
 
         # ---- Table (header + scrollable rows) ----
         table = ttk.Frame(right, style="Card.TFrame", padding=(0,2))
@@ -203,45 +219,46 @@ class App(tk.Tk):
         hdr = ttk.Frame(table, style="Card.TFrame")
         hdr.pack(fill="x", pady=(0,2))
         self._apply_col_layout(hdr)
-        ttk.Label(hdr, text="Point",  style="Heading.TLabel", anchor="w").grid(row=0, column=0, sticky="w", padx=(COL_LEFT_PAD,2))
+        ttk.Label(hdr, text="Cell",  style="Heading.TLabel", anchor="w").grid(row=0, column=0, sticky="w", padx=(COL_LEFT_PAD,2))
         ttk.Label(hdr, text="Active", style="Heading.TLabel", anchor="center").grid(row=0, column=1, sticky="ew")
-        ttk.Label(hdr, text="R (Ω)",  style="Heading.TLabel", anchor="center").grid(row=0, column=2, sticky="ew")
+        ttk.Label(hdr, text="R (mΩ)",  style="Heading.TLabel", anchor="center").grid(row=0, column=2, sticky="ew")
         ttk.Label(hdr, text="V (V)",  style="Heading.TLabel", anchor="center").grid(row=0, column=3, sticky="ew")
 
-        sc_wrapper = ttk.Frame(table, style="Card.TFrame")
-        sc_wrapper.pack(fill="both", expand=True)
+        # ====== (สำคัญ) สร้าง Canvas + Scrollbar สำหรับรายการ Point ======
+        sc = ttk.Frame(table, style="Card.TFrame")
+        sc.pack(fill="both", expand=True)
 
-        # Canvas: ใช้ fill="both" เพื่อให้กว้างตามกรอบ และสูงตามพื้นที่ที่เหลือ
         self.points_canvas = tk.Canvas(
-            sc_wrapper, bg=COLOR_PANEL, highlightthickness=1, highlightbackground=COLOR_BORDER
+            sc, height=220, width=RIGHT_TABLE_WIDTH-18,
+            bg=COLOR_PANEL, highlightthickness=1, highlightbackground=COLOR_BORDER
         )
-        vbar = ttk.Scrollbar(sc_wrapper, orient="vertical", command=self.points_canvas.yview)
+        vbar = ttk.Scrollbar(sc, orient="vertical", command=self.points_canvas.yview)
         self.points_canvas.configure(yscrollcommand=vbar.set)
+
+        # ให้แคนวาสขยายเต็มพื้นที่เพื่อเลื่อนสบายขึ้น
         self.points_canvas.pack(side="left", fill="both", expand=True)
         vbar.pack(side="right", fill="y")
 
-        # ปุ่มเลื่อน (optional)
-        #btns = ttk.Frame(right, style="Card.TFrame")
-        #btns.pack(fill="x", pady=(6,0))
-        #ttk.Button(btns, text="▲ Up", width=6, command=lambda: self.points_canvas.yview_scroll(-3, "units")).pack(side="left", padx=(0,6))
-        #ttk.Button(btns, text="▼ Down", width=6, command=lambda: self.points_canvas.yview_scroll( 3, "units")).pack(side="left")
-
-        # inner frame
+        # เฟรมจริงที่เก็บแถว อยู่ข้างใน Canvas
         self.points_frame = ttk.Frame(self.points_canvas, style="Card.TFrame")
         self.points_window = self.points_canvas.create_window((0,0), window=self.points_frame, anchor="nw")
 
-        # อัปเดต scrollregion เสมอ (รวมทั้งหลังสร้างเสร็จ)
-        self.points_frame.bind("<Configure>", self._update_points_scroll)
-        self.points_canvas.bind("<Configure>", self._update_points_scroll)
-        self.after_idle(self._update_points_scroll)
+        
+        # อัปเดต scrollregion และให้ความกว้างภายในเท่ากับแคนวาส
+        def _update_scrollregion(_e=None):
+            self.points_canvas.configure(scrollregion=self.points_canvas.bbox("all"))
+            try:
+                self.points_canvas.itemconfigure(self.points_window, width=self.points_canvas.winfo_width())
+            except:
+                pass
 
-        # bind mouse wheel กับทั้ง frame/canvas/wrapper
+        self.points_frame.bind("<Configure>", _update_scrollregion)
+        self.points_canvas.bind("<Configure>", _update_scrollregion)
         self._bind_scrolling(self.points_frame, self.points_canvas)
-        self._bind_scrolling(self.points_canvas, self.points_canvas)
-        self._bind_scrolling(sc_wrapper, self.points_canvas)
+        # ====== จบส่วน Canvas + Scrollbar ======
 
         # rows
-        self.row_widgets = []
+        self.row_widgets = []  # (lamp_label, r_var, r_entry, v_var, v_entry)
         for i in range(self.num_points.get()):
             rowf = ttk.Frame(self.points_frame, style="Card.TFrame")
             rowf.grid_columnconfigure(0, minsize=COL_W_POINT, weight=0)
@@ -250,7 +267,7 @@ class App(tk.Tk):
             rowf.grid_columnconfigure(3, minsize=COL_W_NUM,   weight=0)
             rowf.pack(fill="x", pady=4)
 
-            lbl = ttk.Label(rowf, text=f"Point {i+1}")
+            lbl = ttk.Label(rowf, text=f"Cell {i+1}")
             lbl.grid(row=0, column=0, sticky="w", padx=(COL_LEFT_PAD,2))
             lbl.bind("<Button-1>", lambda e, idx=i: self._jump_to(idx))
 
@@ -281,7 +298,7 @@ class App(tk.Tk):
         self.btn_measure = ttk.Button(ctrl, text="Measure (Manual)", command=self._measure_one)
         self.btn_measure.pack(side="left", padx=(0,8), ipady=2)
 
-        self.lbl_ohm = ttk.Label(ctrl, text="— Ω", style="Live.TLabel"); self.lbl_ohm.pack(side="left", padx=20)
+        self.lbl_ohm = ttk.Label(ctrl, text="— mΩ", style="Live.TLabel"); self.lbl_ohm.pack(side="left", padx=20)
         self.lbl_volt= ttk.Label(ctrl, text="— V",  style="Live.TLabel"); self.lbl_volt.pack(side="left", padx=20)
 
         self.btn_auto_start = ttk.Button(ctrl, text="Start (Auto)", command=self._auto_start)
@@ -291,6 +308,8 @@ class App(tk.Tk):
 
         self.btn_auto_export = ttk.Button(ctrl, text="Auto Export: OFF", command=self._toggle_auto_export)
         self.btn_auto_export.pack(side="left", padx=(20,0), ipady=2)
+        # ให้ปุ่มสะท้อนสถานะเดิม (คงค่าแม้มีการ reset)
+        self.btn_auto_export.config(text=f"Auto Export: {'ON' if self.auto_export.get() else 'OFF'}")
 
         # Save folder row
         save_row = ttk.Frame(wrapper, style="Card.TFrame")
@@ -301,12 +320,11 @@ class App(tk.Tk):
         ttk.Button(save_row, text="Browse", command=self._browse_folder).pack(side="left")
         ttk.Label(save_row, text="(optional)", style="Muted.TLabel").pack(side="left", padx=6)
 
-        # bottom bar
         bottom = ttk.Frame(wrapper, style="Card.TFrame")
         bottom.pack(fill="x", pady=(10,0))
-        ttk.Button(bottom, text="Clear Results", command=self._reset_results).pack(side="left")
-        ttk.Button(bottom, text="Reset All",    command=self._reset).pack(side="left", padx=(8,0))
-        ttk.Button(bottom, text="Export (.txt)", command=self._manual_export).pack(side="left", padx=(10,0))
+        ttk.Button(bottom, text="Reset", command=self._reset).pack(side="left")
+        #ttk.Button(bottom, text="Export (.txt)", command=self._manual_export).pack(side="left", padx=(10,0))
+        ttk.Button(bottom, text="Export (.txt)", command=self._export_txt_table).pack(side="left", padx=(10,0))
 
         self._update_mode_buttons()
         self._refresh_rows()
@@ -324,30 +342,35 @@ class App(tk.Tk):
         meas = ttk.Labelframe(frm, text="Measurement", style="Card.TLabelframe", padding=12)
         meas.grid(row=0, column=0, sticky="nsew", padx=(0,8))
 
+        # row 0: Point Count + Auto Interval
         r0 = ttk.Frame(meas, style="Card.TFrame"); r0.pack(anchor="w", pady=6, fill="x")
-        ttk.Label(r0, text="Point Count", width=16).pack(side="left")
+        ttk.Label(r0, text="Cell Count", width=16).pack(side="left")
         ttk.Spinbox(r0, from_=1, to=999, textvariable=self.num_points, width=8, justify="right").pack(side="left", padx=(8,16))
         ttk.Label(r0, text="Auto Interval", width=14).pack(side="left")
         ttk.Spinbox(r0, from_=10, to=100000, increment=10,
                     textvariable=self.auto_interval, width=8, justify="right").pack(side="left", padx=(8,6))
         ttk.Label(r0, text="ms", style="Muted.TLabel").pack(side="left")
 
-        r1 = ttk.Frame(meas, style="Card.TFrame"); r1.pack(anchor="w", pady=4, fill="x")
-        ttk.Label(r1, text="R Limits", width=16).pack(side="left")
-        ttk.Entry(r1, textvariable=self.r_min, width=10, justify="center").pack(side="left", padx=(8,6))
-        ttk.Label(r1, text="–", style="Muted.TLabel").pack(side="left")
-        ttk.Entry(r1, textvariable=self.r_max, width=10, justify="center").pack(side="left", padx=(6,6))
-        ttk.Label(r1, text="Ω", style="Muted.TLabel").pack(side="left")
+        # row 1: R Set & Tol
+        r1 = ttk.Frame(meas, style="Card.TFrame"); r1.pack(anchor="w", pady=6, fill="x")
+        ttk.Label(r1, text="R Set", width=16).pack(side="left")
+        ttk.Entry(r1, textvariable=self.r_set, width=10, justify="center").pack(side="left", padx=(8,8))
+        ttk.Label(r1, text="mΩ", style="Muted.TLabel").pack(side="left")
+        ttk.Label(r1, text="  ±Tol", width=6).pack(side="left", padx=(12,0))
+        ttk.Entry(r1, textvariable=self.r_tol, width=10, justify="center").pack(side="left", padx=(6,6))
+        ttk.Label(r1, text="mΩ", style="Muted.TLabel").pack(side="left")
 
-        r2 = ttk.Frame(meas, style="Card.TFrame"); r2.pack(anchor="w", pady=4, fill="x")
-        ttk.Label(r2, text="V Limits", width=16).pack(side="left")
-        ttk.Entry(r2, textvariable=self.v_min, width=10, justify="center").pack(side="left", padx=(8,6))
-        ttk.Label(r2, text="–", style="Muted.TLabel").pack(side="left")
-        ttk.Entry(r2, textvariable=self.v_max, width=10, justify="center").pack(side="left", padx=(6,6))
+        # row 2: V Set & Tol
+        r2 = ttk.Frame(meas, style="Card.TFrame"); r2.pack(anchor="w", pady=6, fill="x")
+        ttk.Label(r2, text="V Set", width=16).pack(side="left")
+        ttk.Entry(r2, textvariable=self.v_set, width=10, justify="center").pack(side="left", padx=(8,8))
+        ttk.Label(r2, text="V", style="Muted.TLabel").pack(side="left")
+        ttk.Label(r2, text="  ±Tol", width=6).pack(side="left", padx=(12,0))
+        ttk.Entry(r2, textvariable=self.v_tol, width=10, justify="center").pack(side="left", padx=(6,6))
         ttk.Label(r2, text="V", style="Muted.TLabel").pack(side="left")
 
         ttk.Button(meas, text="Apply", command=self._apply_settings).pack(anchor="w", pady=(10,2))
-        ttk.Label(meas, text="R_min ≤ R ≤ R_max และ V_min ≤ V ≤ V_max", style="Muted.TLabel").pack(anchor="w")
+        ttk.Label(meas, text="เงื่อนไข: |R - R_set| ≤ R_tol และ |V - V_set| ≤ V_tol", style="Muted.TLabel").pack(anchor="w")
 
         # ========== Instrument I/O ==========
         io = ttk.Labelframe(frm, text="Instrument I/O", style="Card.TLabelframe", padding=12)
@@ -371,8 +394,9 @@ class App(tk.Tk):
         self.btn_disconnect = ttk.Button(rc, text="Disconnect", command=self._disconnect_serial); self.btn_disconnect.pack(side="left", padx=8)
         ttk.Button(rc, text="Test Read", command=lambda: messagebox.showinfo(
             "Test Read",
-            f"Simulated read: R={self._read_meter()[0]:.3f} Ω, V={self._read_meter()[1]:.3f} V\n\n"
-            "(*จะอ่านจริงเมื่อคุณใส่โปรโตคอลกับเครื่องวัดแล้ว)")).pack(side="left", padx=(8,0))
+            f"Simulated read:\nR={self._read_meter()[0]:.2f} mΩ, V={self._read_meter()[1]:.4f} V\n\n"
+            "(*จะอ่านจริงเมื่อคุณใส่โปรโตคอลกับเครื่องวัดแล้ว)")
+        ).pack(side="left", padx=(8,0))
 
         self.lbl_conn = ttk.Label(io, text="Status: Disconnected", style="Muted.TLabel")
         self.lbl_conn.pack(anchor="w", pady=(8,0))
@@ -380,37 +404,46 @@ class App(tk.Tk):
         self._refresh_com_ports()
         self._update_serial_buttons()
 
-    # ---------- settings apply ----------
+    # ---------- Settings apply ----------
     def _apply_settings(self):
         try:
-            new_n  = int(self.num_points.get());  assert new_n > 0
-            _ = float(self.r_min.get()); _ = float(self.r_max.get())
-            _ = float(self.v_min.get()); _ = float(self.v_max.get())
-            iv = int(self.auto_interval.get()); self.auto_interval.set(max(10, iv))
+            n  = int(self.num_points.get());  assert n > 0
+            iv = int(self.auto_interval.get()); assert iv >= 10
+            rset = float(self.r_set.get());  rtol = float(self.r_tol.get());  assert rtol >= 0
+            vset = float(self.v_set.get());  vtol = float(self.v_tol.get());  assert vtol >= 0
         except Exception as e:
             messagebox.showerror("Invalid", f"Settings error: {e}"); return
 
-        need_rebuild = (new_n != len(self.r_values))
+        # ถ้าจำนวนจุดเปลี่ยน ต้อง rebuild main
+        need_rebuild = (n != len(self.r_values))
         if need_rebuild:
             self._auto_stop()
             self._init_arrays()
             self._build_main()
         else:
+            # แค่ค่าลิมิต/interval เปลี่ยน → refresh
+            self._refresh_limits_labels()
             self._refresh_rows()
             self._update_big_box()
 
         messagebox.showinfo("Apply", "Settings applied.")
+
+    def _refresh_limits_labels(self):
+        rmin, rmax = self._r_bounds()
+        vmin, vmax = self._v_bounds()
+        self.lbl_rmin.config(text=f"{rmin:.3g}")
+        self.lbl_rmax.config(text=f"{rmax:.3g}")
+        self.lbl_vmin.config(text=f"{vmin:.3g}")
+        self.lbl_vmax.config(text=f"{vmax:.3g}")
 
     # --------- Serial helpers ---------
     def _refresh_com_ports(self):
         ports = []
         try:
             from serial.tools import list_ports
-            raw = [p.device for p in list_ports.comports()]
-            # sort แบบตัวเลขท้าย "COM"
             ports = sorted(
-                raw,
-                key=lambda x: (x[:3]!="COM", int(x[3:]) if x.startswith("COM") and x[3:].isdigit() else 0, x)
+                [p.device for p in list_ports.comports()],
+                key=lambda x: int(x.replace("COM","")) if x.startswith("COM") and x[3:].isdigit() else x
             )
         except Exception as e:
             print("List COM error:", e)
@@ -447,7 +480,7 @@ class App(tk.Tk):
         messagebox.showinfo("Serial", "Disconnected")
 
     def _update_serial_buttons(self):
-        if getattr(self, "btn_connect", None) is None:
+        if getattr(self, "btn_connect", None) is None:  # not built yet
             return
         if self.ser:
             self.btn_connect.state(["disabled"])
@@ -456,7 +489,7 @@ class App(tk.Tk):
             self.btn_connect.state(["!disabled"])
             self.btn_disconnect.state(["disabled"])
 
-    # ---------- helpers ----------
+    # ---------- table/layout helpers ----------
     def _apply_col_layout(self, frame):
         frame.grid_columnconfigure(0, minsize=COL_W_POINT, weight=0)  # Point
         frame.grid_columnconfigure(1, minsize=COL_W_LAMP,  weight=0)  # Active
@@ -486,20 +519,15 @@ class App(tk.Tk):
         self._scroll_row_into_view(idx)
 
     def _update_points_scroll(self, _e=None):
-        # อัปเดตขอบเขตเลื่อนให้ครอบคลุม inner frame
+        # (ยังคงอยู่เพื่อความเข้ากันได้ — ตอนนี้เราใช้ _update_scrollregion ภายใน _build_main แล้ว)
+        self.points_canvas.configure(scrollregion=self.points_canvas.bbox("all"))
         try:
-            self.points_canvas.configure(scrollregion=self.points_canvas.bbox("all"))
-            # ปรับความกว้างของ inner window ให้เท่ากับ canvas กว้าง
             self.points_canvas.itemconfigure(self.points_window, width=self.points_canvas.winfo_width())
-        except Exception:
+        except: 
             pass
 
     def _bind_scrolling(self, widget, canvas):
-        # รองรับ Windows/Mac
-        def on_wheel(e):
-            delta = e.delta
-            if delta == 0: return
-            canvas.yview_scroll(-1 if delta > 0 else 1, "units")
+        def on_wheel(e): canvas.yview_scroll(-1 if e.delta>0 else 1, "units")
         widget.bind("<Enter>", lambda _: widget.bind_all("<MouseWheel>", on_wheel))
         widget.bind("<Leave>", lambda _: widget.unbind_all("<MouseWheel>"))
         # รองรับ Linux
@@ -532,8 +560,10 @@ class App(tk.Tk):
         if r is None and v is None:
             bg, fg, text = COLOR_IDLE_BG, COLOR_IDLE_TEXT, ""
         else:
-            ok_r = (self.r_min.get() <= (r if r is not None else 1e9) <= self.r_max.get())
-            ok_v = (self.v_min.get() <= (v if v is not None else 1e9) <= self.v_max.get())
+            rmin, rmax = self._r_bounds()
+            vmin, vmax = self._v_bounds()
+            ok_r = (r is not None) and (rmin <= r <= rmax)
+            ok_v = (v is not None) and (vmin <= v <= vmax)
             is_pass = ok_r and ok_v
             bg = COLOR_PASS_BG if is_pass else COLOR_FAIL_BG
             fg = COLOR_PASS_TEXT if is_pass else COLOR_FAIL_TEXT
@@ -544,15 +574,19 @@ class App(tk.Tk):
         self.big_canvas.create_text(w/2, h/2, text=text, fill=fg, font=("Segoe UI", 60, "bold"))
 
     def _refresh_rows(self):
+        rmin, rmax = self._r_bounds()
+        vmin, vmax = self._v_bounds()
         for i,(lamp, r_var, r_ent, v_var, v_ent) in enumerate(self.row_widgets):
             r = self.r_values[i]
             v = self.v_values[i]
 
-            r_var.set("" if r is None else f"{r:.3g}")
-            v_var.set("" if v is None else f"{v:.3g}")
+            if r is None: r_var.set("")
+            else:        r_var.set(f"{r:.2f}")
+            if v is None: v_var.set("")
+            else:         v_var.set(f"{v:.4f}")
 
-            ok_r = (r is not None) and (self.r_min.get() <= r <= self.r_max.get())
-            ok_v = (v is not None) and (self.v_min.get() <= v <= self.v_max.get())
+            ok_r = (r is not None) and (rmin <= r <= rmax)
+            ok_v = (v is not None) and (vmin <= v <= vmax)
             is_pass = ok_r and ok_v
             self.flags[i] = (r is not None) and (v is not None) and is_pass
 
@@ -566,14 +600,15 @@ class App(tk.Tk):
     def _update_big_box(self):
         r = self.r_values[self.current_idx]
         v = self.v_values[self.current_idx]
-        self.lbl_ohm.config(text=("— Ω" if r is None else f"{r:.4g} Ω"))
-        self.lbl_volt.config(text=("— V"  if v is None else f"{v:.4g} V"))
+        self.lbl_ohm.config(text=("— mΩ" if r is None else f"{r:.2f} mΩ"))   # <-- 2 decimal
+        self.lbl_volt.config(text=("— V"  if v is None else f"{v:.4f} V"))   # <-- 4 decimal
         self._draw_big_box()
+
 
     # ---------- measurement ----------
     def _measure_one(self, from_auto: bool = False):
         idx = self.current_idx
-        r, v = self._read_meter()   # TODO: replace with real meter reading
+        r, v = self._read_meter()   # TODO: replace with real meter I/O
         self.r_values[idx] = r
         self.v_values[idx] = v
         self._refresh_rows()
@@ -586,18 +621,19 @@ class App(tk.Tk):
             self._scroll_row_into_view(self.current_idx)
         else:
             # มาถึงจุดสุดท้ายแล้ว
+            if from_auto and self.auto_export.get():
+                # Auto mode + Auto Export ON → เซฟหลังครบทุกจุด
+                self._export_snapshot()
+            # หยุด auto ถ้ากำลังวิ่ง
             if from_auto:
                 self._auto_running = False
                 if self._auto_job is not None:
                     self.after_cancel(self._auto_job)
                     self._auto_job = None
                 self._update_mode_buttons()
-                # เซฟทีเดียวเมื่อครบทุกจุด ถ้าเปิด Auto Export
-                if self.auto_export.get():
-                    self._export_snapshot()
                 self.after(0, lambda: messagebox.showinfo("Auto", "Auto measurement finished."))
             else:
-                messagebox.showinfo("Done", "Measured all points.")
+                messagebox.showinfo("Done", "Measured all cells.")
 
     def _auto_start(self):
         if self._auto_running:
@@ -617,48 +653,204 @@ class App(tk.Tk):
         if not self._auto_running:
             return
         self._measure_one(from_auto=True)
-        if self._auto_running:
+        if self._auto_running:  # นัดรอบถัดไปเฉพาะถ้ายังไม่จบ
             interval = max(50, int(self.auto_interval.get()))
             self._auto_job = self.after(interval, self._tick_auto)
 
-    # Simulated meter read (replace later with real IO)
+    def _parse_meter_line(self, line: str):
+        """
+        แปลงสตริงจากเครื่อง:  +5.87263E-03,+3.09940E+00,+0
+        คืนค่า (r_ohm, v_volt, status)  -- r_ohm เป็น 'โอห์ม' (ยังไม่คูณเป็น mΩ)
+        """
+        s = (line or "").strip()
+        parts = [p.strip() for p in s.split(",")]
+        if len(parts) < 2:
+            raise ValueError(f"bad format: {s}")
+
+        r_ohm  = float(parts[0])
+        v_volt = float(parts[1])
+        status = None
+        if len(parts) >= 3:
+            try:
+                status = int(parts[2].replace("+", ""))
+            except Exception:
+                status = None
+        return r_ohm, v_volt, status
+
+
+    def _query_fetc_once(self, line_ending=b"\r\n", timeout_ms=1500):
+        """
+        ส่งคำสั่ง FETC? แล้วอ่าน 1 บรรทัดกลับมา (decode เป็น str)
+        """
+        if not self.ser:
+            raise RuntimeError("serial not connected")
+
+        # เคลียร์บัฟเฟอร์ขาเข้า (กันค่าเก่าค้าง)
+        try:
+            self.ser.reset_input_buffer()
+        except Exception:
+            pass
+
+        # ส่งคำสั่ง (ส่วนใหญ่ SCPI ใช้ \n หรือ \r\n — ลอง \r\n ก่อน)
+        self.ser.write(b"FETC?" + line_ending)
+
+        # อ่านคำตอบ 1 บรรทัด
+        old_to = self.ser.timeout
+        self.ser.timeout = max(0.1, timeout_ms/1000.0)
+        try:
+            raw = self.ser.readline()
+            if not raw:
+                raise TimeoutError("serial timeout")
+            try:
+                return raw.decode("ascii", errors="ignore")
+            except Exception:
+                return raw.decode("utf-8", errors="ignore")
+        finally:
+            self.ser.timeout = old_to
+
     def _read_meter(self):
-        r_center = (self.r_min.get()+self.r_max.get())/2
-        v_center = (self.v_min.get()+self.v_max.get())/2
-        r_span = (self.r_max.get()-self.r_min.get())/2
-        v_span = (self.v_max.get()-self.v_min.get())/2
-        if random.random() < 0.8:
-            r = random.uniform(r_center-0.6*r_span, r_center+0.6*r_span)
-            v = random.uniform(v_center-0.6*v_span, v_center+0.6*v_span)
-        else:
-            r = r_center + random.choice([-1,1]) * random.uniform(0.7*r_span, 1.6*r_span)
-            v = v_center + random.choice([-1,1]) * random.uniform(0.7*v_span, 1.6*v_span)
-        return float(r), float(v)
+        """
+        พยายามอ่านค่าจริงด้วย FETC?:
+        - เครื่องส่ง R เป็นโอห์ม, V เป็นโวลต์ -> แปลง R เป็น mΩ เพื่อให้ตรง UI
+        ถ้าอ่านไม่ได้ ค่อย fallback เป็น random ในกรอบลิมิต
+        """
+        try:
+            line = self._query_fetc_once(line_ending=b"\r\n")  # หรือ b"\n" หากเครื่องใช้แค่นิวไลน์เดียว
+            r_ohm, v_volt, _status = self._parse_meter_line(line)
+            r_milliohm = r_ohm * 1000.0  # แปลงโอห์ม -> mΩ
+            return float(r_milliohm), float(v_volt)
+
+        except Exception:
+            # Fallback: สุ่มค่าในกรอบ Set±Tol เหมือนเดิม (ใช้งานได้แม้ไม่มีเครื่อง)
+            rmin, rmax = self._r_bounds()
+            vmin, vmax = self._v_bounds()
+            r_center = (rmin + rmax)/2
+            v_center = (vmin + vmax)/2
+            r_span = (rmax - rmin)/2
+            v_span = (vmax - vmin)/2
+            if random.random() < 0.8:
+                r = random.uniform(r_center-0.6*r_span, r_center+0.6*r_span)
+                v = random.uniform(v_center-0.6*v_span, v_center+0.6*v_span)
+            else:
+                r = r_center + random.choice([-1,1]) * random.uniform(0.7*r_span, 1.6*r_span)
+                v = v_center + random.choice([-1,1]) * random.uniform(0.7*v_span, 1.6*v_span)
+            return float(r), float(v)
+
 
     # ---------- export ----------
     def _toggle_auto_export(self):
         self.auto_export.set(not self.auto_export.get())
         self.btn_auto_export.config(text=f"Auto Export: {'ON' if self.auto_export.get() else 'OFF'}")
 
+    def _export_txt_table(self):
+        """Export .txt: Items, Cell, Pt, min(mΩ), R(mΩ), max(mΩ), min(V), V(V), max(V)"""
+        import datetime
+        from tkinter import filedialog, messagebox
+
+        # Limits from Set ± Tol
+        rmin = float(self.r_set.get()) - float(self.r_tol.get())
+        rmax = float(self.r_set.get()) + float(self.r_tol.get())
+        vmin = float(self.v_set.get()) - float(self.v_tol.get())
+        vmax = float(self.v_set.get()) + float(self.v_tol.get())
+
+        # helpers
+        def one_r(i):
+            val = self.r_values[i]
+            if isinstance(val, (list, tuple)): val = val[0] if val else None
+            return val
+        def one_v(i):
+            val = self.v_values[i]
+            if isinstance(val, (list, tuple)): val = val[0] if val else None
+            return val
+
+        # format helpers
+        def fr(x):  # R with 2 decimals
+            return "" if x is None else f"{x:.2f}"
+        def fv(x):  # V with 4 decimals
+            return "" if x is None else f"{x:.4f}"
+        def cell(t, w, align="<"):
+            t = "" if t is None else str(t)
+            return f"{t:{align}{w}}"
+
+        # column spec (ปรับความกว้างได้)
+        cols = [
+            ("Items", 6),
+            ("Cell", 6),
+            ("Pt", 4),
+            ("min(mΩ)", 8),
+            ("R(mΩ)", 8),
+            ("max(mΩ)", 8),
+            ("min(V)", 10),
+            ("V(V)", 10),
+            ("max(V)", 10),
+        ]
+
+        # file name
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"{self.model_name.get().strip() or 'model'}_{ts}.txt"
+        path = filedialog.asksaveasfilename(
+            title="Save table (.txt)",
+            initialfile=default_name,
+            defaultextension=".txt",
+            filetypes=[("Text file","*.txt")]
+        )
+        if not path:
+            return
+
+        lines = []
+        lines.append(f"Model : {self.model_name.get().strip() or '-'}")
+        lines.append(f"Time  : {datetime.datetime.now():%Y-%m-%d %H:%M:%S}")
+        lines.append(f"R Set/Tol : {self.r_set.get()} mΩ  ±{self.r_tol.get()} mΩ  -> min={rmin:.3f}, max={rmax:.3f}")
+        lines.append(f"V Set/Tol : {self.v_set.get()} V  ±{self.v_tol.get()} V  -> min={vmin:.4f}, max={vmax:.4f}")
+        lines.append("")
+
+        header = " ".join(cell(h, w) for h, w in cols)
+        sep = "-" * len(header)
+        lines.append(header)
+        lines.append(sep)
+
+        for i in range(self.num_points.get()):
+            r = one_r(i)
+            v = one_v(i)
+            row = [
+                i + 1,                       # Items
+                f"Cell{i+1}",                # Cell
+                i + 1,                       # Pt
+                f"{rmin:.2f}",               # min(Ω)
+                fr(r),                       # R(Ω)
+                f"{rmax:.2f}",               # max(Ω)
+                f"{vmin:.4f}",               # min(V)
+                fv(v),                       # V(V)
+                f"{vmax:.4f}",               # max(V)
+            ]
+            lines.append(" ".join(cell(x, w) for x, (_, w) in zip(row, cols)))
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            messagebox.showinfo("Export (.txt)", "Saved successfully.")
+        except Exception as e:
+            messagebox.showerror("Export (.txt)", f"Save failed:\n{e}")
+
     def _result_lines(self):
+        rmin, rmax = self._r_bounds()
+        vmin, vmax = self._v_bounds()
         lines = []
         lines.append(f"Model\t{self.model_name.get().strip() or '-'}")
         lines.append(f"Time\t{time.strftime('%Y-%m-%d %H:%M:%S')}")
         lines.append("")
-        lines.append(f"Limits R\tmin={self.r_min.get()}\tmax={self.r_max.get()}  (Ohm)")
-        lines.append(f"Limits V\tmin={self.v_min.get()}\tmax={self.v_max.get()}  (Volt)")
+        lines.append(f"R Set\t{self.r_set.get()} mΩ\tTol ±{self.r_tol.get()} mΩ\t(min={rmin}, max={rmax})")
+        lines.append(f"V Set\t{self.v_set.get()} V\tTol ±{self.v_tol.get()} V\t(min={vmin}, max={vmax})")
         lines.append("")
-        lines.append("Point\tR(Ω)\tV(V)\tResult")
+        lines.append("Cell\tR(mΩ)\tV(V)\tResult")
         for i in range(self.num_points.get()):
-            r = self.r_values[i]; v = self.v_values[i]
+            r = self.r_values[i]
+            v = self.v_values[i]
             if r is None or v is None:
                 lines.append(f"{i+1}\t\t\tN/A")
             else:
                 res = LABEL_OK if self.flags[i] else LABEL_NG
                 lines.append(f"{i+1}\t{r:.6f}\t{v:.6f}\t{res}")
-        overall = LABEL_OK if all((rv is not None) for rv in self.r_values) and all(self.flags) else LABEL_NG
-        lines.append("")
-        lines.append(f"Overall\t{overall}")
         return lines
 
     def _export_snapshot(self):
@@ -670,7 +862,6 @@ class App(tk.Tk):
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n".join(self._result_lines()))
-            messagebox.showinfo("Export", f"Saved:\n{path}")
         except Exception as e:
             messagebox.showerror("Export", f"Auto export failed:\n{e}")
 
@@ -694,23 +885,7 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Export", f"Save failed:\n{e}")
 
-    # ---------- reset ----------
-    def _reset_results(self):
-        """ล้างเฉพาะผลการวัดทั้งหมด คงโหมด/Auto-Export/โฟลเดอร์ไว้"""
-        if self._auto_running:
-            self._auto_stop()
-        n = len(self.r_values)
-        self.r_values = [None]*n
-        self.v_values = [None]*n
-        self.flags    = [False]*n
-        self.current_idx = 0
-        try: self.point_combo.current(0)
-        except: pass
-        self._refresh_rows()
-        self._update_big_box()
-        try: self.points_canvas.yview_moveto(0.0)
-        except: pass
-
+    # ---------- misc ----------
     def _reset(self):
         self._auto_stop()
         self._init_arrays()
